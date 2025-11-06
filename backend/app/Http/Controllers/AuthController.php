@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -44,6 +45,21 @@ class AuthController extends Controller
 
             Log::info('Login attempt', ['email' => $request->email]);
 
+            // Check database connection first
+            try {
+                DB::connection()->getPdo();
+            } catch (\Exception $dbException) {
+                Log::error('Database connection error during login: ' . $dbException->getMessage(), [
+                    'exception' => get_class($dbException),
+                    'trace' => $dbException->getTraceAsString(),
+                ]);
+                
+                return response()->json([
+                    'message' => 'Ошибка подключения к базе данных. Обратитесь к администратору.',
+                    'error' => app()->environment('local') ? $dbException->getMessage() : null,
+                ], 500);
+            }
+
             $user = User::where('email', $request->email)->first();
 
             if (!$user) {
@@ -78,10 +94,18 @@ class AuthController extends Controller
                 'email' => $request->email ?? null,
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
+                'exception_class' => get_class($e),
             ]);
             
+            // Check if it's a database-related error
+            $isDbError = str_contains($e->getMessage(), 'PDO') || 
+                        str_contains($e->getMessage(), 'database') ||
+                        str_contains($e->getMessage(), 'SQLSTATE');
+            
             return response()->json([
-                'message' => 'Произошла ошибка при входе',
+                'message' => $isDbError 
+                    ? 'Ошибка подключения к базе данных. Обратитесь к администратору.'
+                    : 'Произошла ошибка при входе',
                 'error' => app()->environment('local') ? $e->getMessage() : null,
             ], 500);
         }

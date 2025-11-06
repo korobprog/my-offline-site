@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ApiController extends Controller
 {
@@ -12,7 +14,7 @@ class ApiController extends Controller
      */
     public function health(): JsonResponse
     {
-        return response()->json([
+        $health = [
             'status' => 'ok',
             'message' => 'Laravel API is running',
             'timestamp' => now(),
@@ -20,8 +22,33 @@ class ApiController extends Controller
             'php_version' => PHP_VERSION,
             'laravel_version' => app()->version(),
             'php_major_version' => PHP_MAJOR_VERSION,
-            'php_minor_version' => PHP_MINOR_VERSION
-        ]);
+            'php_minor_version' => PHP_MINOR_VERSION,
+        ];
+
+        // Check database connection
+        try {
+            DB::connection()->getPdo();
+            $health['database'] = 'connected';
+        } catch (\Exception $e) {
+            $health['database'] = 'disconnected';
+            $health['database_error'] = app()->environment('local') ? $e->getMessage() : 'Database connection failed';
+            $health['status'] = 'degraded';
+        }
+
+        // Check VAPID configuration
+        $vapidKey = trim((string) config('webpush.vapid.public_key', ''));
+        $health['vapid_configured'] = $vapidKey !== '';
+
+        // Check PHP extensions
+        $health['php_extensions'] = [
+            'pdo' => extension_loaded('pdo'),
+            'pdo_mysql' => extension_loaded('pdo_mysql'),
+            'pdo_pgsql' => extension_loaded('pdo_pgsql'),
+            'mbstring' => extension_loaded('mbstring'),
+            'openssl' => extension_loaded('openssl'),
+        ];
+
+        return response()->json($health);
     }
 
     /**
@@ -78,16 +105,27 @@ class ApiController extends Controller
      */
     public function vapidKey(): JsonResponse
     {
-        $publicKey = trim((string) config('webpush.vapid.public_key', ''));
+        try {
+            $publicKey = trim((string) config('webpush.vapid.public_key', ''));
 
-        if ($publicKey === '') {
+            if ($publicKey === '') {
+                // Return 200 with empty key instead of 500 error
+                // Frontend will handle this gracefully
+                return response()->json([
+                    'vapid_public_key' => '',
+                    'message' => 'VAPID public key is not configured. Push notifications will be disabled.',
+                ], 200);
+            }
+
             return response()->json([
-                'message' => 'VAPID public key is not configured.',
-            ], 500);
+                'vapid_public_key' => $publicKey,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error getting VAPID key: ' . $e->getMessage());
+            return response()->json([
+                'vapid_public_key' => '',
+                'message' => 'Error retrieving VAPID key.',
+            ], 200);
         }
-
-        return response()->json([
-            'vapid_public_key' => $publicKey,
-        ]);
     }
 }
