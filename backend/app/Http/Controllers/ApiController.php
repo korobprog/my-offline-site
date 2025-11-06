@@ -106,24 +106,60 @@ class ApiController extends Controller
     public function vapidKey(): JsonResponse
     {
         try {
-            $publicKey = trim((string) config('webpush.vapid.public_key', ''));
+            // Log the attempt
+            Log::info('VAPID key request received');
 
-            if ($publicKey === '') {
-                // Return 200 with empty key instead of 500 error
-                // Frontend will handle this gracefully
-                return response()->json([
-                    'vapid_public_key' => '',
-                    'message' => 'VAPID public key is not configured. Push notifications will be disabled.',
-                ], 200);
+            // Try to get the key from config
+            $publicKey = '';
+            try {
+                $publicKey = trim((string) config('webpush.vapid.public_key', ''));
+                Log::info('VAPID key retrieved from config', [
+                    'key_length' => strlen($publicKey),
+                    'key_preview' => $publicKey ? substr($publicKey, 0, 20) . '...' : 'empty',
+                ]);
+            } catch (\Exception $configException) {
+                Log::warning('Error reading VAPID config: ' . $configException->getMessage(), [
+                    'exception' => get_class($configException),
+                    'file' => $configException->getFile(),
+                    'line' => $configException->getLine(),
+                ]);
+                // Continue with empty key
             }
 
+            // Also try to get from env directly as fallback
+            if ($publicKey === '') {
+                try {
+                    $publicKey = trim((string) env('VAPID_PUBLIC_KEY', ''));
+                    if ($publicKey !== '') {
+                        Log::info('VAPID key retrieved from env directly');
+                    }
+                } catch (\Exception $envException) {
+                    Log::warning('Error reading VAPID from env: ' . $envException->getMessage());
+                }
+            }
+
+            // Always return 200, even if key is empty
+            // Frontend will handle this gracefully
             return response()->json([
                 'vapid_public_key' => $publicKey,
+                'configured' => $publicKey !== '',
+                'message' => $publicKey === '' 
+                    ? 'VAPID public key is not configured. Push notifications will be disabled.'
+                    : 'VAPID key retrieved successfully',
+            ], 200);
+        } catch (\Throwable $e) {
+            // Catch any fatal errors or exceptions
+            Log::error('Fatal error getting VAPID key: ' . $e->getMessage(), [
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
             ]);
-        } catch (\Exception $e) {
-            Log::error('Error getting VAPID key: ' . $e->getMessage());
+            
+            // Always return 200 with empty key to prevent frontend errors
             return response()->json([
                 'vapid_public_key' => '',
+                'configured' => false,
                 'message' => 'Error retrieving VAPID key.',
             ], 200);
         }
